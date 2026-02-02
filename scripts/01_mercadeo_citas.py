@@ -6,31 +6,49 @@ import re
 import unicodedata
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-EXCEL_DIR = BASE_DIR / 'excel'
+INPUT_DIR = BASE_DIR / 'excel_dentos' / '01_citas_detallado'
+OUTPUT_DIR = BASE_DIR / 'excel_generado'
+EXCEL_DIR = BASE_DIR / 'excel' # Mantener para compatibilidad si se necesita, o eliminar si ya no se usa
 
 # Busca el primer archivo que cumpla el prefijo, ignorando mayúsculas/minúsculas/acentos simples
-def _find_first_excel(prefix: str) -> Path:
+# Fuente: busca en INPUT_DIR
+def _find_input(prefix: str) -> Path:
     candidates = []
-    for f in EXCEL_DIR.glob('*.xlsx'):
+    # Asegurar que existe el directorio
+    INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    
+    for f in INPUT_DIR.glob('*.xlsx'):
         name = f.name.lower()
         if name.startswith(prefix.lower()):
             candidates.append(f)
     if not candidates:
-        raise FileNotFoundError(f"No se encontró un archivo .xlsx que comience con '{prefix}' en {EXCEL_DIR}")
-    # elige el más reciente por fecha de modificación
+        raise FileNotFoundError(f"No se encontró un archivo .xlsx que comience con '{prefix}' en {INPUT_DIR}")
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return candidates[0]
 
-# Fuente: cualquier archivo que empiece por "citas detallado"
-SRC = _find_first_excel('citas detallado')
-try:
-    # Plantilla destino: cualquier archivo que empiece por "formato odontologia"
-    DEST = _find_first_excel('formato odontologia')
-except FileNotFoundError:
-    DEST = None
+# Fuente: archivo en inputs/01_citas
+SRC = _find_input('citas detallado')
+# Plantilla destino: busca en OUTPUT_DIR para actualización incremental
+def _find_output_master(prefix: str) -> Path:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    candidates = []
+    for f in OUTPUT_DIR.glob('*.xlsx'):
+        name = f.name.lower()
+        if name.startswith(prefix.lower()):
+            candidates.append(f)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0]
+
+# Intentamos buscar un archivo maestro existente en outputs/
+# Intentamos buscar un archivo maestro existente en outputs/
+DEST = _find_output_master('formato_odontologia')
 
 # El archivo de salida se define dinámicamente según el mes y se versiona si existe
-OUTPUT_DIR = EXCEL_DIR
+# No redefinimos OUTPUT_DIR aquí porque ya está arriba
+# El archivo de salida será siempre el mismo nombre base para ir acumulando, 
+# o versionado si queremos mantener historial (por ahora mantendremos lógica similar pero centralizada)
 SHEET = 'Datos Mercadeo'
 
 DEST_COLS = [
@@ -46,10 +64,10 @@ DEST_COLS = [
 
 # Rango de semanas: edita aquí para cambiar fechas por mes.
 WEEK_RANGES = {
-    'Semana1': (date(2026, 1, 2), date(2026, 1, 10)),
-    'Semana2': (date(2026, 1, 13), date(2026, 1, 17)),
-    'Semana3': (date(2026, 1, 19), date(2026, 1, 24)),
-    'Semana4': (date(2026, 1, 26), date(2026, 1, 31)),
+    'SEMANA1': (date(2026, 1, 2), date(2026, 1, 10)),
+    'SEMANA2': (date(2026, 1, 13), date(2026, 1, 17)),
+    'SEMANA3': (date(2026, 1, 19), date(2026, 1, 24)),
+    'SEMANA4': (date(2026, 1, 26), date(2026, 1, 31)),
 }
 
 MONTH_MAP = {
@@ -122,8 +140,8 @@ def load_source():
     src['Programados'] = 1
 
     src['Asistido'] = src['asistio'].fillna('').str.upper().str.startswith('SI').astype(int)
-    # Efectivo: 1 si asistio comienza con SI (cualquier variación), de lo contrario 0
-    src['Efectivo'] = src['asistio'].fillna('').str.upper().str.startswith('SI').astype(int)
+    # Efectivo: Se deja vacío porque se llenará en el script 02
+    src['Efectivo'] = pd.NA
 
     # cotizacion NO se llena desde este archivo; queda vacío para ser integrado desde otra fuente
     src['cotizacion'] = pd.NA
@@ -176,7 +194,8 @@ def main():
 
     out = pd.concat([dest_keep, new_rows], ignore_index=True)
     # Crear nombre de salida versionado
-    base_name = f"Formato_Odontologia_Mercadeo_script_{month_label}"
+    # Nombre fijo para el maestro acumulado
+    base_name = f"formato_odontologia_{month_label}"
     candidate = OUTPUT_DIR / f"{base_name}.xlsx"
     idx = 1
     while candidate.exists():
