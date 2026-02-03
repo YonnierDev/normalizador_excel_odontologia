@@ -11,7 +11,7 @@ Debes colocar los archivos descargados en las carpetas numeradas correspondiente
   - Coloca aquí el archivo que comienza con **"citas detallado"**.
   - *Ejemplo*: `citas detallado enero.xlsx`
 
-- **`excel_dentos/02_pacientes_con_pagos/`**:
+- **`excel_dentos/02_citas_con_pagos/`**:
   - (Próximamente) Para archivo de pagos.
 
 ### 2. Ejecución
@@ -20,6 +20,10 @@ Para procesar los archivos, ejecuta los scripts en orden:
 1. **Paso 1**: Generar reporte de mercadeo desde citas.
    ```bash
    python scripts/01_mercadeo_citas.py
+   ```
+2. **Paso 2**: Cruzar información de pagos y efectividad.
+   ```bash
+   python scripts/02_mercadeo_pagos.py
    ```
 
 ### 3. Salida (Carpeta `excel_generado`)
