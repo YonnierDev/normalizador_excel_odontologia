@@ -64,10 +64,10 @@ DEST_COLS = [
 
 # Rango de semanas: edita aquí para cambiar fechas por mes.
 WEEK_RANGES = {
-    'SEMANA1': (date(2026, 1, 2), date(2026, 1, 10)),
-    'SEMANA2': (date(2026, 1, 13), date(2026, 1, 17)),
-    'SEMANA3': (date(2026, 1, 19), date(2026, 1, 24)),
-    'SEMANA4': (date(2026, 1, 26), date(2026, 1, 31)),
+    'SEMANA1': (date(2026, 2, 2), date(2026, 2, 7)),
+    'SEMANA2': (date(2026, 2, 9), date(2026, 2, 14)),
+    'SEMANA3': (date(2026, 2, 16), date(2026, 2, 21)),
+    'SEMANA4': (date(2026, 2, 23), date(2026, 2, 28)),
 }
 
 MONTH_MAP = {
