@@ -4,6 +4,7 @@ from pathlib import Path
 from datetime import date
 import re
 import unicodedata
+from decimal import Decimal
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_DIR = BASE_DIR / 'excel_dentos' / '01_citas_detallado'
@@ -55,7 +56,7 @@ DEST_COLS = [
     'id_registro', 'Numero_Documento', 'Paciente', 'Municipio', 'Convenio', 'Fecha',
     'Año', 'Mes', 'Semana', 'Agente', 'Profesional_Asignado', 'Especialidad',
     'Canal_Captacion', 'Tipo_Cita', 'Programados', 'Asistido', 'Efectivo',
-    'cotizacion', 'Admisionado', 'Admisión_Efectiva', 'Asesor_Comercial',
+    'cotizacion', 'Admisionado', 'Admisión_Efectiva', 'Factura', 'Metodo_Pago', 'Asesor_Comercial',
     'Odontologo_Venta', 'Venta_Primer_Pago', 'Cartera (2do pago)',
     'Recaudo (venta día)', 'Tratamiento (Venta total de cotizado)',
     'Valor ejecutado', 'Total venta (Efectivo + cotización)',
@@ -79,6 +80,8 @@ MONTH_MAP = {
 
 def load_source():
     src = pd.read_excel(SRC)
+    # Elimina columnas duplicadas invisibles que rompen el agg
+    src = src.loc[:, ~src.columns.duplicated()]
     src['Fecha_dt'] = pd.to_datetime(src['fecha'], errors='coerce')
 
     # Etiquetar semana según rango configurado
@@ -94,7 +97,33 @@ def load_source():
     src['Paciente'] = src[name_cols].fillna('').astype(str).agg(' '.join, axis=1)
     src['Paciente'] = src['Paciente'].str.replace(r'\s+', ' ', regex=True).str.strip()
 
-    src['Numero_Documento'] = src['documento']
+    def _normalize_doc(doc):
+        if pd.isna(doc):
+            return ''
+        if isinstance(doc, (int, float)):
+            try:
+                return str(int(round(doc)))
+            except Exception:
+                return str(doc).strip()
+        s = str(doc).strip()
+        if not s:
+            return ''
+        s = s.replace(',', '')
+        if 'e' in s.lower():
+            try:
+                return str(int(Decimal(s)))
+            except Exception:
+                pass
+        if re.match(r'^\d+\.0+$', s):
+            return s.split('.')[0]
+        if '.' in s:
+            try:
+                return str(int(float(s)))
+            except Exception:
+                return s.split('.')[0]
+        return s
+
+    src['Numero_Documento'] = src['documento'].apply(_normalize_doc)
     src['Convenio'] = src['Tarifario'].fillna('PARTICULAR')
     src['Año'] = src['Fecha_dt'].dt.year
     src['Mes'] = src['Fecha_dt'].dt.month.map(MONTH_MAP)

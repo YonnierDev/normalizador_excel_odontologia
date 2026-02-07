@@ -12,10 +12,12 @@ EXPECTED_RECAUDO_ROWS = 25  # Ajusta o pon None para desactivar la validación
 # Filtros por etapas (actívalos uno a uno para depurar)
 APPLY_FAC_ANUL = True       # fac_anulada == NO
 APPLY_ANTICIPO = True       # excluir forma_pago con "anticipo"
-APPLY_DEDUPE = False        # deduplicar por clave
+APPLY_DEDUPE = True         # deduplicar por clave
+EXPAND_MASTER = True        # crear filas nuevas si faltan pagos (solo caso factura igual con forma/valor distinto)
 
 # Debug opcional: filtra y muestra solo un día (YYYY-MM-DD). Deja en None para modo normal.
 DEBUG_DAY = None
+DEBUG_DOC = None
 
 # Busca el primer archivo de pagos
 def _find_input(prefix: str) -> Path:
@@ -53,8 +55,39 @@ def _find_master() -> Path:
 def normalize_doc(doc):
     if pd.isna(doc):
         return ''
+    # Manejar numéricos y notación científica correctamente
+    if isinstance(doc, (int, float)):
+        try:
+            return str(int(round(doc)))
+        except Exception:
+            return str(doc).strip()
     s = str(doc).strip()
-    return s.split('.')[0] # Quitar decimales si vienen como float
+    if not s:
+        return ''
+    # Normalizar separadores y limpiar
+    s = s.replace(' ', '')
+    # Si viene con coma decimal, convertir a punto
+    if ',' in s and '.' not in s:
+        s = s.replace(',', '.')
+    # Limpiar caracteres no numéricos relevantes
+    s = re.sub(r'[^0-9eE\+\-\.]', '', s)
+    # Notación científica
+    if 'e' in s.lower():
+        try:
+            from decimal import Decimal
+            return str(int(Decimal(s)))
+        except Exception:
+            pass
+    # Decimal simple
+    if re.match(r'^\d+\.0+$', s):
+        return s.split('.')[0]
+    # Otros casos con punto
+    if '.' in s:
+        try:
+            return str(int(float(s)))
+        except Exception:
+            return s.split('.')[0]
+    return s
 
 def _norm_col(name: str) -> str:
     if name is None:
@@ -109,9 +142,23 @@ def main():
         df_master = pd.read_excel(master_path)
         df_pagos = pd.read_excel(input_path)
 
-        # Normalizar documentos para el merge
+        # Asegurar columnas nuevas en maestro
+        if 'Factura' not in df_master.columns:
+            df_master['Factura'] = pd.NA
+        if 'Metodo_Pago' not in df_master.columns:
+            df_master['Metodo_Pago'] = pd.NA
+        if 'Asesor_Comercial' not in df_master.columns:
+            df_master['Asesor_Comercial'] = pd.NA
+        # Forzar dtype object para evitar warnings al asignar texto
+        for col in ['Factura', 'Metodo_Pago', 'Asesor_Comercial']:
+            df_master[col] = df_master[col].astype(object)
+
+        # Usar documento normalizado para el match
         df_master['doc_norm'] = df_master['Numero_Documento'].apply(normalize_doc)
         df_pagos['doc_norm'] = df_pagos['documento'].apply(normalize_doc)
+        # Mantener paciente solo para logs
+        df_master['paciente_raw'] = df_master['Paciente'].astype(str).str.strip()
+        df_pagos['paciente_raw'] = df_pagos['paciente'].astype(str).str.strip()
         
         # Convertir fechas para comparar
         # Asumiendo formato DD/MM/YYYY en maestro (es string según script 01)
@@ -126,6 +173,9 @@ def main():
             debug_date = pd.to_datetime(DEBUG_DAY, errors='coerce')
             if pd.notna(debug_date):
                 df_pagos = df_pagos[df_pagos['Fecha_dia'] == debug_date.date()].copy()
+        # Debug: filtrar solo un documento si está configurado
+        if DEBUG_DOC:
+            df_pagos = df_pagos[df_pagos['documento'].astype(str).str.split('.').str[0].str.strip() == DEBUG_DOC].copy()
 
         # Normalizar valor_pagado a número (evita duplicados por formato)
         if 'valor_pagado' in df_pagos.columns:
@@ -157,14 +207,14 @@ def main():
             is_anticipo = forma_norm.str.contains('anticipo') | forma_norm.str.contains('anticpo')
             df_pagos = df_pagos[~is_anticipo].copy()
 
-        # Dedupe por las columnas solicitadas (incluye documento)
+        # Dedupe exacto por las 5 columnas:
+        # fecha (día) + documento + factura + forma_pago + valor_pagado
         dedup_subset = ['doc_norm', 'Fecha_dia', 'valor_pagado_num']
         if factura_col:
-            # Mantener factura vacía como valor válido (no se elimina)
-            df_pagos[factura_col] = df_pagos[factura_col].astype(str).str.strip()
+            df_pagos[factura_col] = df_pagos[factura_col].astype(str)
             dedup_subset.append(factura_col)
         if forma_col:
-            df_pagos[forma_col] = df_pagos[forma_col].astype(str).str.strip()
+            df_pagos[forma_col] = df_pagos[forma_col].astype(str)
             dedup_subset.append(forma_col)
         facturador_col = _find_col(df_pagos, ['facturador', 'asesor_comercial', 'asesor comercial'])
         if facturador_col:
@@ -176,6 +226,19 @@ def main():
         else:
             df_pagos_clean = df_pagos.copy()
 
+        # (logs removidos)
+
+        # Limpiar valores previos en maestro para las fechas/documentos que vamos a recalcular
+        keys = set(zip(df_pagos_clean['doc_norm'], df_pagos_clean['Fecha_dia']))
+        df_master['Fecha_dia'] = df_master['Fecha_dt'].dt.date
+        mask = df_master.apply(lambda r: (r['doc_norm'], r['Fecha_dia']) in keys, axis=1)
+        cols_clear = ['Recaudo (venta día)', 'Asesor_Comercial', 'Factura', 'Metodo_Pago', 'Efectivo']
+        for col in cols_clear:
+            if col in df_master.columns:
+                df_master.loc[mask, col] = pd.NA
+
+        # (logs removidos)
+
         # Debug: mostrar conteos
         if DEBUG_DAY:
             print(f"[DEBUG] Fecha filtro: {DEBUG_DAY}")
@@ -183,7 +246,7 @@ def main():
             print(f"[DEBUG] Pagos después dedupe: {len(df_pagos_clean)}")
 
         # 2. Agrupar pagos por Paciente y Fecha (Día) SIN SUMAR
-        # Clave: (doc_norm, fecha_date) -> {pagos: [{valor, facturador, factura_vacia}], facturadores: set()}
+        # Clave: (doc_norm, fecha_date) -> {pagos: [...], factura_counts: {factura: set((forma, valor))}}
         daily_payments = {}
         for _, row in df_pagos_clean.iterrows():
             doc = row['doc_norm']
@@ -201,22 +264,25 @@ def main():
                 valor = 0
 
             if day_key not in daily_payments:
-                daily_payments[day_key] = {'pagos': [], 'facturadores': set()}
+                daily_payments[day_key] = {'pagos': [], 'factura_counts': {}}
 
             if valor > 0:
                 factura_val = ''
                 if factura_col:
                     factura_val = row.get(factura_col, '')
                 factura_vacia = str(factura_val).strip() == ''
+                forma_val = row.get(forma_col, '') if forma_col else ''
                 daily_payments[day_key]['pagos'].append({
                     'valor': valor,
                     'factura_vacia': factura_vacia,
                     'facturador': row.get(facturador_col, '') if facturador_col else '',
+                    'factura': str(factura_val).strip(),
+                    'forma': str(forma_val).strip(),
                 })
-            if facturador_col:
-                fact_val = row.get(facturador_col, '')
-                if pd.notna(fact_val) and str(fact_val).strip():
-                    daily_payments[day_key]['facturadores'].add(str(fact_val).strip())
+                # Track distinct (forma, valor) per factura
+                factura_key = str(factura_val).strip()
+                fv_set = daily_payments[day_key]['factura_counts'].setdefault(factura_key, set())
+                fv_set.add((str(forma_val).strip(), valor))
 
         # 3. Asignar al Maestro
         # Convertir columna a objeto para evitar FutureWarning si estaba vacía (float/NaN)
@@ -226,7 +292,7 @@ def main():
         updates_efectivo = 0
         updates_recaudo = 0 # Nuevo contador
 
-        # Expandir maestro si faltan filas para pagos con factura vacía
+        # Expandir maestro solo si hay misma factura con forma/valor distintos
         key_to_rows = {}
         for idx, row in df_master.iterrows():
             doc = row['doc_norm']
@@ -242,14 +308,14 @@ def main():
             rows = key_to_rows[key]
             needed = len(info['pagos']) - len(rows)
             if needed > 0:
-                # Solo crear filas extra si hay pagos con factura vacía
-                extra_pagos = [p for p in info['pagos'] if p['factura_vacia']]
-                if extra_pagos:
+                # Expandir solo si alguna factura tiene más de un (forma,valor)
+                has_multi_for_factura = any(len(v) > 1 for v in info['factura_counts'].values())
+                if has_multi_for_factura:
                     template = df_master.loc[rows[0]].copy()
-                    for _ in range(min(needed, len(extra_pagos))):
+                    for _ in range(needed):
                         rows_to_append.append(template.copy())
 
-        if rows_to_append:
+        if EXPAND_MASTER and rows_to_append:
             df_master = pd.concat([df_master, pd.DataFrame(rows_to_append)], ignore_index=True)
             # Recalcular índice de filas por clave después de expandir
             key_to_rows = {}
@@ -282,13 +348,18 @@ def main():
                     df_master.at[idx, 'Efectivo'] = 1
                     updates_recaudo += 1
                     updates_efectivo += 1
-                    # Asesor_Comercial: solo cuando se asigna recaudo
-                    if info['facturadores']:
-                        df_master.at[idx, 'Asesor_Comercial'] = " / ".join(sorted(info['facturadores']))
+                    # Factura y Metodo_Pago del pago asignado
+                    df_master.at[idx, 'Factura'] = pago.get('factura', '')
+                    df_master.at[idx, 'Metodo_Pago'] = pago.get('forma', '')
+                    # Asesor_Comercial: solo el facturador de este pago
+                    fact_name = str(pago.get('facturador', '')).strip()
+                    if fact_name:
+                        df_master.at[idx, 'Asesor_Comercial'] = fact_name
                         updates_asesor += 1
 
         # Limpieza de columnas temporales
-        df_master.drop(columns=['doc_norm', 'Fecha_dt'], inplace=True)
+        df_master.drop(columns=['doc_norm', 'paciente_raw', 'Fecha_dt', 'Fecha_dia'], inplace=True)
+        print(f"Filas sin Recaudo: {df_master['Recaudo (venta día)'].isna().sum()}")
         
         # Rellenar vacíos en Efectivo con 0
         df_master['Efectivo'] = df_master['Efectivo'].fillna(0).astype(int)
