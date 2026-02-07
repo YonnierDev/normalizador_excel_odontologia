@@ -87,6 +87,9 @@ def normalize_doc(doc):
             return str(int(float(s)))
         except Exception:
             return s.split('.')[0]
+    # Si quedó con 11 dígitos, recortar a 10 (caso puntual de documentos)
+    if re.match(r'^\d{11}$', s):
+        return s[:10]
     return s
 
 def _norm_col(name: str) -> str:
@@ -211,7 +214,13 @@ def main():
         # fecha (día) + documento + factura + forma_pago + valor_pagado
         dedup_subset = ['doc_norm', 'Fecha_dia', 'valor_pagado_num']
         if factura_col:
-            df_pagos[factura_col] = df_pagos[factura_col].astype(str)
+            df_pagos[factura_col] = (
+                df_pagos[factura_col]
+                .fillna('')
+                .astype(str)
+                .str.strip()
+                .replace({'nan': '', 'None': '', 'NONE': ''})
+            )
             dedup_subset.append(factura_col)
         if forma_col:
             df_pagos[forma_col] = df_pagos[forma_col].astype(str)
@@ -270,6 +279,8 @@ def main():
                 factura_val = ''
                 if factura_col:
                     factura_val = row.get(factura_col, '')
+                if pd.isna(factura_val) or str(factura_val).strip().lower() in ('nan', 'none'):
+                    factura_val = ''
                 factura_vacia = str(factura_val).strip() == ''
                 forma_val = row.get(forma_col, '') if forma_col else ''
                 daily_payments[day_key]['pagos'].append({
@@ -292,7 +303,9 @@ def main():
         updates_efectivo = 0
         updates_recaudo = 0 # Nuevo contador
 
-        # Expandir maestro solo si hay misma factura con forma/valor distintos
+        # Expandir maestro si faltan filas por:
+        # - misma factura con forma/valor distintos
+        # - pagos con factura vacía
         key_to_rows = {}
         for idx, row in df_master.iterrows():
             doc = row['doc_norm']
@@ -308,9 +321,10 @@ def main():
             rows = key_to_rows[key]
             needed = len(info['pagos']) - len(rows)
             if needed > 0:
-                # Expandir solo si alguna factura tiene más de un (forma,valor)
+                # Expandir si hay facturas con múltiples (forma,valor) o pagos con factura vacía
                 has_multi_for_factura = any(len(v) > 1 for v in info['factura_counts'].values())
-                if has_multi_for_factura:
+                has_empty_factura = any(p.get('factura_vacia') for p in info['pagos'])
+                if has_multi_for_factura or has_empty_factura:
                     template = df_master.loc[rows[0]].copy()
                     for _ in range(needed):
                         rows_to_append.append(template.copy())
