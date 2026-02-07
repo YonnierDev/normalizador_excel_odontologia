@@ -26,7 +26,19 @@ Para procesar los archivos, ejecuta los scripts en orden:
    python scripts/02_mercadeo_pagos.py
    ```
 
-### 3. Salida (Carpeta `excel_generado`)
+### 3. Normalizacion de documentos (cedulas)
+Los scripts normalizan el numero de documento para reducir errores manuales de digitacion:
+
+- Se conserva cualquier documento con menos de 10 digitos (no se descarta).
+- Si el documento llega con mas de 11 digitos, se recorta a los ultimos 11.
+- Si queda con 11 digitos:
+  - Si empieza con 1, se elimina el ultimo digito.
+  - Si no empieza con 1, se elimina el primer digito.
+
+Esto ayuda a corregir errores comunes (por ejemplo, formatos en notacion cientifica o un digito extra).
+Si los errores manuales son muy frecuentes o muy inconsistentes, no siempre se podra recuperar la informacion exacta, por lo que es importante revisar los reportes de correcciones en consola.
+
+### 4. Salida (Carpeta `excel_generado`)
 El archivo resultante se generará en la carpeta `excel_generado/` con el nombre:
 - `formato_odontologia_[MES].xlsx`
 

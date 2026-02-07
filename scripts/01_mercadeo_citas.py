@@ -121,9 +121,33 @@ def load_source():
                 return str(int(float(s)))
             except Exception:
                 return s.split('.')[0]
+        # Si tiene más de 11 dígitos, recortar a 11 (nos quedamos con los últimos 11)
+        if re.match(r'^\d{12,}$', s):
+            s = s[-11:]
+        # Si quedó con 11 dígitos:
+        # - Si empieza con 1: eliminar el último dígito
+        # - Si no empieza con 1: eliminar el primer dígito
+        if re.match(r'^\d{11}$', s):
+            if s.startswith('1'):
+                return s[:-1]
+            return s[1:]
         return s
 
     src['Numero_Documento'] = src['documento'].apply(_normalize_doc)
+    # Log de documentos corregidos a 10 dígitos (regla de 11 dígitos)
+    src['doc_raw_str'] = src['documento'].astype(str).str.strip()
+    src['doc_raw_digits'] = src['doc_raw_str'].str.replace(r'\D', '', regex=True)
+    doc_fix = src[src['doc_raw_digits'].str.len() == 11].copy()
+    if not doc_fix.empty:
+        print(f"[LOG] Documentos corregidos (11->10): {len(doc_fix)}")
+        if 'usuario' in doc_fix.columns:
+            counts = doc_fix['usuario'].fillna('').astype(str).str.strip().value_counts()
+            print("[LOG] Agentes con correcciones (usuario):")
+            print(counts.to_string())
+        cols = ['doc_raw_str', 'Numero_Documento', 'Paciente']
+        if 'usuario' in doc_fix.columns:
+            cols.append('usuario')
+        print(doc_fix[cols].drop_duplicates().head(20).to_string(index=False))
     src['Convenio'] = src['Tarifario'].fillna('PARTICULAR')
     src['Año'] = src['Fecha_dt'].dt.year
     src['Mes'] = src['Fecha_dt'].dt.month.map(MONTH_MAP)

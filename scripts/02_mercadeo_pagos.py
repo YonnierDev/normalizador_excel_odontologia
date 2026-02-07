@@ -8,7 +8,7 @@ import unicodedata
 BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_DIR = BASE_DIR / 'excel_dentos' / '02_citas_con_pagos'
 OUTPUT_DIR = BASE_DIR / 'excel_generado'
-EXPECTED_RECAUDO_ROWS = 25  # Ajusta o pon None para desactivar la validación
+EXPECTED_RECAUDO_ROWS = None  # Desactivado: ahora se reporta sin validar fijo
 # Filtros por etapas (actívalos uno a uno para depurar)
 APPLY_FAC_ANUL = True       # fac_anulada == NO
 APPLY_ANTICIPO = True       # excluir forma_pago con "anticipo"
@@ -87,9 +87,16 @@ def normalize_doc(doc):
             return str(int(float(s)))
         except Exception:
             return s.split('.')[0]
-    # Si quedó con 11 dígitos, recortar a 10 (caso puntual de documentos)
+    # Si tiene más de 11 dígitos, recortar a 11 (nos quedamos con los últimos 11)
+    if re.match(r'^\d{12,}$', s):
+        s = s[-11:]
+    # Si quedó con 11 dígitos:
+    # - Si empieza con 1: eliminar el último dígito
+    # - Si no empieza con 1: eliminar el primer dígito
     if re.match(r'^\d{11}$', s):
-        return s[:10]
+        if s.startswith('1'):
+            return s[:-1]
+        return s[1:]
     return s
 
 def _norm_col(name: str) -> str:
@@ -162,6 +169,23 @@ def main():
         # Mantener paciente solo para logs
         df_master['paciente_raw'] = df_master['Paciente'].astype(str).str.strip()
         df_pagos['paciente_raw'] = df_pagos['paciente'].astype(str).str.strip()
+
+        # Log de documentos corregidos (regla 11 dígitos -> 10)
+        facturador_col = _find_col(df_pagos, ['facturador', 'asesor_comercial', 'asesor comercial'])
+        df_pagos['doc_raw_str'] = df_pagos['documento'].astype(str).str.strip()
+        df_pagos['doc_raw_digits'] = df_pagos['doc_raw_str'].str.replace(r'\D', '', regex=True)
+        doc_changes = df_pagos[df_pagos['doc_raw_digits'].str.len() == 11].copy()
+        if not doc_changes.empty:
+            cols = ['doc_raw_str', 'doc_norm', 'paciente_raw']
+            if facturador_col:
+                cols.append(facturador_col)
+            unique_changes = doc_changes[cols].drop_duplicates()
+            print(f"[LOG] Documentos corregidos (11->10): {len(unique_changes)}")
+            if facturador_col:
+                counts = unique_changes[facturador_col].fillna('').astype(str).str.strip().value_counts()
+                print("[LOG] Facturador con correcciones (Asesor_Comercial):")
+                print(counts.to_string())
+            print(unique_changes.head(20).to_string(index=False))
         
         # Convertir fechas para comparar
         # Asumiendo formato DD/MM/YYYY en maestro (es string según script 01)
@@ -257,6 +281,7 @@ def main():
         # 2. Agrupar pagos por Paciente y Fecha (Día) SIN SUMAR
         # Clave: (doc_norm, fecha_date) -> {pagos: [...], factura_counts: {factura: set((forma, valor))}}
         daily_payments = {}
+        pagos_by_key = {}
         for _, row in df_pagos_clean.iterrows():
             doc = row['doc_norm']
             if not doc:
@@ -265,6 +290,7 @@ def main():
             if pd.isna(row['Fecha_dt']):
                 continue
             day_key = (doc, row['Fecha_dia'])
+            pagos_by_key.setdefault(day_key, []).append(row)
 
             valor = row.get('valor_pagado_num', 0)
             try:
@@ -314,6 +340,28 @@ def main():
             key = (doc, row['Fecha_dt'].date())
             key_to_rows.setdefault(key, []).append(idx)
 
+        # Log: documentos/fechas que no existen en el maestro
+        missing_keys = []
+        for key in daily_payments.keys():
+            if key not in key_to_rows:
+                missing_keys.append(key)
+        if missing_keys:
+            print(f"[LOG] Claves sin filas en maestro: {len(missing_keys)}")
+            samples = []
+            for key in missing_keys:
+                rows = pagos_by_key.get(key, [])
+                if not rows:
+                    continue
+                r0 = rows[0]
+                samples.append({
+                    'doc_norm': key[0],
+                    'fecha': key[1],
+                    'paciente': str(r0.get('paciente', '')).strip(),
+                })
+            if samples:
+                df_missing = pd.DataFrame(samples).drop_duplicates()
+                print(df_missing.head(20).to_string(index=False))
+
         rows_to_append = []
         for key, info in daily_payments.items():
             if key not in key_to_rows:
@@ -329,6 +377,7 @@ def main():
                     for _ in range(needed):
                         rows_to_append.append(template.copy())
 
+        rows_added = len(rows_to_append)
         if EXPAND_MASTER and rows_to_append:
             df_master = pd.concat([df_master, pd.DataFrame(rows_to_append)], ignore_index=True)
             # Recalcular índice de filas por clave después de expandir
@@ -383,18 +432,11 @@ def main():
         df_master.to_excel(output_path, index=False)
         
         print("Proceso completado.")
-        print(f"Filas actualizadas con Asesor Comercial: {updates_asesor}")
+        print(f"Filas nuevas agregadas al maestro: {rows_added}")
+        print(f"Filas con Recaudo asignado: {updates_recaudo}")
+        print(f"Filas con Asesor_Comercial asignado: {updates_asesor}")
         print(f"Filas marcadas como Efectivo: {updates_efectivo}")
-        print(f"Filas con Recaudo asignado (único por día): {updates_recaudo}")
         print(f"Archivo actualizado: {output_path}")
-
-        # Validación de conteo esperado
-        if EXPECTED_RECAUDO_ROWS is not None:
-            recaudo_count = df_master['Recaudo (venta día)'].notna().sum()
-            if recaudo_count != EXPECTED_RECAUDO_ROWS:
-                raise ValueError(
-                    f"Recaudo filas esperadas: {EXPECTED_RECAUDO_ROWS}, encontradas: {recaudo_count}"
-                )
 
     except Exception as e:
         print(f"Error: {e}")
