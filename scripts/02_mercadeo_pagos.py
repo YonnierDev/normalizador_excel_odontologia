@@ -25,6 +25,22 @@ MONTH_MAP = {
     9: 'SEPTIEMBRE', 10: 'OCTUBRE', 11: 'NOVIEMBRE', 12: 'DICIEMBRE',
 }
 
+# Rango de semanas (actualiza aquí cuando cambie el mes)
+WEEK_RANGES = {
+    'SEMANA1': (datetime(2026, 2, 2).date(), datetime(2026, 2, 7).date()),
+    'SEMANA2': (datetime(2026, 2, 9).date(), datetime(2026, 2, 14).date()),
+    'SEMANA3': (datetime(2026, 2, 16).date(), datetime(2026, 2, 21).date()),
+    'SEMANA4': (datetime(2026, 2, 23).date(), datetime(2026, 2, 28).date()),
+}
+
+def _week_from_date(d):
+    if not d:
+        return pd.NA
+    for name, (start, end) in WEEK_RANGES.items():
+        if start <= d <= end:
+            return name
+    return pd.NA
+
 # Busca el primer archivo de pagos
 def _find_input(prefix: str) -> Path:
     candidates = []
@@ -402,7 +418,7 @@ def main():
                         new_row['Fecha'] = dt.strftime('%d/%m/%Y')
                         new_row['Año'] = dt.year
                         new_row['Mes'] = MONTH_MAP.get(dt.month, pd.NA)
-                    new_row['Semana'] = pd.NA
+                    new_row['Semana'] = _week_from_date(key[1])
                     new_row['doc_norm'] = key[0]
                     new_row['Fecha_dt'] = pd.to_datetime(key[1], errors='coerce')
                     new_row['Fecha_dia'] = key[1]
