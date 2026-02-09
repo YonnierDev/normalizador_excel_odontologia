@@ -19,6 +19,12 @@ EXPAND_MASTER = True        # crear filas nuevas si faltan pagos (solo caso fact
 DEBUG_DAY = None
 DEBUG_DOC = None
 
+MONTH_MAP = {
+    1: 'ENERO', 2: 'FEBRERO', 3: 'MARZO', 4: 'ABRIL',
+    5: 'MAYO', 6: 'JUNIO', 7: 'JULIO', 8: 'AGOSTO',
+    9: 'SEPTIEMBRE', 10: 'OCTUBRE', 11: 'NOVIEMBRE', 12: 'DICIEMBRE',
+}
+
 # Busca el primer archivo de pagos
 def _find_input(prefix: str) -> Path:
     candidates = []
@@ -140,6 +146,14 @@ def _parse_valor_pagado(val):
         return int(float(s))
     except Exception:
         return 0
+
+def _next_id_start(df):
+    if 'id_registro' not in df.columns:
+        return 0
+    nums = df['id_registro'].astype(str).str.extract(r'(\d+)$')[0].dropna()
+    if nums.empty:
+        return 0
+    return nums.astype(int).max()
 
 def main():
     try:
@@ -340,6 +354,8 @@ def main():
             key = (doc, row['Fecha_dt'].date())
             key_to_rows.setdefault(key, []).append(idx)
 
+        rows_to_append = []
+
         # Log: documentos/fechas que no existen en el maestro
         missing_keys = []
         for key in daily_payments.keys():
@@ -347,6 +363,12 @@ def main():
                 missing_keys.append(key)
         if missing_keys:
             print(f"[LOG] Claves sin filas en maestro: {len(missing_keys)}")
+            # Resumen por cédula (doc_norm) para revisar casos
+            missing_docs = [k[0] for k in missing_keys if k and k[0]]
+            if missing_docs:
+                doc_counts = pd.Series(missing_docs).value_counts()
+                print("[LOG] Cedulas sin match (conteo por doc):")
+                print(doc_counts.head(50).to_string())
             samples = []
             for key in missing_keys:
                 rows = pagos_by_key.get(key, [])
@@ -362,7 +384,31 @@ def main():
                 df_missing = pd.DataFrame(samples).drop_duplicates()
                 print(df_missing.head(20).to_string(index=False))
 
-        rows_to_append = []
+        # Si no hay match en el maestro, agregar filas nuevas al final con datos mínimos
+        rows_added_missing = 0
+        if EXPAND_MASTER and missing_keys:
+            next_id = _next_id_start(df_master)
+            for key in missing_keys:
+                pagos_list = pagos_by_key.get(key, [])
+                for pago_row in pagos_list:
+                    next_id += 1
+                    new_row = {col: pd.NA for col in df_master.columns}
+                    new_row['id_registro'] = f"ODON-{str(next_id).zfill(7)}"
+                    new_row['Numero_Documento'] = key[0]
+                    pac = str(pago_row.get('paciente', '')).strip()
+                    new_row['Paciente'] = pac if pac else pd.NA
+                    dt = pd.to_datetime(key[1], errors='coerce')
+                    if pd.notna(dt):
+                        new_row['Fecha'] = dt.strftime('%d/%m/%Y')
+                        new_row['Año'] = dt.year
+                        new_row['Mes'] = MONTH_MAP.get(dt.month, pd.NA)
+                    new_row['Semana'] = pd.NA
+                    new_row['doc_norm'] = key[0]
+                    new_row['Fecha_dt'] = pd.to_datetime(key[1], errors='coerce')
+                    new_row['Fecha_dia'] = key[1]
+                    rows_to_append.append(new_row)
+                    rows_added_missing += 1
+
         for key, info in daily_payments.items():
             if key not in key_to_rows:
                 continue
@@ -432,7 +478,7 @@ def main():
         df_master.to_excel(output_path, index=False)
         
         print("Proceso completado.")
-        print(f"Filas nuevas agregadas al maestro: {rows_added}")
+        print(f"Filas nuevas agregadas al maestro: {rows_added} (sin match: {rows_added_missing})")
         print(f"Filas con Recaudo asignado: {updates_recaudo}")
         print(f"Filas con Asesor_Comercial asignado: {updates_asesor}")
         print(f"Filas marcadas como Efectivo: {updates_efectivo}")
