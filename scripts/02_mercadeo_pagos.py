@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
@@ -464,14 +464,17 @@ def main():
                 # Recaudo: asignar un pago por fila (sin sumar)
                 if info['pagos']:
                     pago = info['pagos'].pop(0)
-                    valor_asignado = pago['valor']
-                    try:
-                        valor_asignado = int(valor_asignado)
-                    except Exception:
-                        pass
-                    df_master.at[idx, 'Recaudo (venta día)'] = valor_asignado
+                    factura_vacia = bool(pago.get('factura_vacia'))
+                    if not factura_vacia:
+                        valor_asignado = pago['valor']
+                        try:
+                            valor_asignado = int(valor_asignado)
+                        except Exception:
+                            pass
+                        df_master.at[idx, 'Recaudo (venta día)'] = valor_asignado
+                        updates_recaudo += 1
+                    # Siempre marcar efectivo si hay pago, pero sin recaudo si no hay factura
                     df_master.at[idx, 'Efectivo'] = 1
-                    updates_recaudo += 1
                     updates_efectivo += 1
                     # Factura y Metodo_Pago del pago asignado
                     df_master.at[idx, 'Factura'] = pago.get('factura', '')
@@ -505,3 +508,9 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+
+
+
+
