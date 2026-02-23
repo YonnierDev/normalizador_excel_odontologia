@@ -54,13 +54,8 @@ SHEET = 'Datos Mercadeo'
 
 DEST_COLS = [
     'id_registro', 'Numero_Documento', 'Paciente', 'Municipio', 'Convenio', 'Fecha',
-    'Año', 'Mes', 'Semana', 'Agente', 'Profesional_Asignado', 'Especialidad',
-    'Canal_Captacion', 'Tipo_Cita', 'Programados', 'Asistido', 'Efectivo',
-    'cotizacion', 'Admisionado', 'Admisión_Efectiva', 'Factura', 'Metodo_Pago', 'Asesor_Comercial',
-    'Odontologo_Venta', 'Venta_Primer_Pago', 'Cartera (2do pago)',
-    'Recaudo (venta día)', 'Tratamiento (Venta total de cotizado)',
-    'Valor ejecutado', 'Total venta (Efectivo + cotización)',
-    'Falta por recuperar cartera'
+    'Mes', 'Semana', 'Agente', 'Profesional_Asignado', 'Especialidad',
+    'Canal_Captacion', 'Tipo_Cita', 'Programados', 'Asistido', 'Efectivo'
 ]
 
 # Rango de semanas: edita aquí para cambiar fechas por mes.
@@ -196,14 +191,10 @@ def load_source():
     # Efectivo: Se deja vacío porque se llenará en el script 02
     src['Efectivo'] = pd.NA
 
-    # cotizacion NO se llena desde este archivo; queda vacío para ser integrado desde otra fuente
-    src['cotizacion'] = pd.NA
 
     # Fecha en formato DD/MM/YYYY como texto
     src['Fecha'] = src['Fecha_dt'].dt.strftime('%d/%m/%Y')
 
-    # Campo nuevo sin datos de origen
-    src['Falta por recuperar cartera'] = pd.NA
 
     return src
 

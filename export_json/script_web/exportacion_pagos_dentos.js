@@ -18,6 +18,8 @@
   const SCROLL_WAIT_MS = 250;
   const SCROLL_MAX_STEPS = 40;
   const ESPERA_ENTRE_DESCARGAS_MS = 1200;
+  const ESPERA_RECUPERACION_MS = 2500;
+  const MAX_REINTENTOS_DIA = 2;
   const TIMEOUT_ACCION_MS = 20000;
   const TIMEOUT_TABLA_MS = 20000;
 
@@ -272,6 +274,30 @@
     return Number.isFinite(v) ? Math.round(v) : 0;
   }
 
+  function extractTotalDocumentos() {
+    const tables = Array.from(document.querySelectorAll("#cuadre_caja_detallado table, table"));
+    for (const table of tables) {
+      const heads = Array.from(table.querySelectorAll("tr:first-child td, tr:first-child th"))
+        .map((x) => keyText(x.textContent));
+      if (
+        heads.length >= 3 &&
+        heads[0].includes("codigo tipo doc") &&
+        heads[1].includes("tipo de doc") &&
+        heads[2].includes("valor")
+      ) {
+        const rows = Array.from(table.querySelectorAll("tr"));
+        for (const row of rows) {
+          const tds = row.querySelectorAll("td");
+          if (tds.length < 3) continue;
+          if (keyText(tds[0].textContent) === "total") {
+            return parseCOP(tds[2].textContent);
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   function extractListado(table) {
     const rows = Array.from(table.querySelectorAll("tr")).slice(1);
     const listado = [];
@@ -319,14 +345,34 @@
   async function exportDia(dateObj, source = "dia", batchMeta = null) {
     const targetDate = formatFechaDDMMYYYY(dateObj);
     log(`Procesando: ${targetDate} (${nombreDia(dateObj)})`);
-    setFechaInput(dateObj);
-    await clickMostrarAndWait(targetDate);
-    await clickDetallesAndWaitTable(targetDate);
+    let lastErr = null;
+    for (let intento = 1; intento <= MAX_REINTENTOS_DIA; intento += 1) {
+      try {
+        setFechaInput(dateObj);
+        await clickMostrarAndWait(targetDate);
+        await clickDetallesAndWaitTable(targetDate);
+        const firstDate = getFirstListadoDate();
+        if (firstDate && firstDate !== targetDate) {
+          throw new Error(`Fecha cargada distinta. Esperada=${targetDate} actual=${firstDate}`);
+        }
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        log(`Reintento ${intento}/${MAX_REINTENTOS_DIA} para ${targetDate}: ${e.message}`);
+        // Recuperacion: intenta forzar vista Detalles y esperar carga.
+        clickDetallesIfNeeded();
+        await sleep(ESPERA_RECUPERACION_MS);
+      }
+    }
+    if (lastErr) throw lastErr;
+
     await forceScrollListado();
 
     const table = await waitForListadoTable();
     const listado = extractListado(table);
     const total = listado.reduce((acc, r) => acc + r.valor, 0);
+    const totalDocumentos = extractTotalDocumentos();
     const iso = formatFechaISO(dateObj);
 
     const payload = {
@@ -340,6 +386,7 @@
       extraido_en: new Date().toISOString(),
       registros: listado.length,
       total_valor: total,
+      total_documentos: totalDocumentos,
       listado_pagos: listado
     };
 
@@ -359,6 +406,7 @@
     const table = await waitForListadoTable();
     const listado = extractListado(table);
     const total = listado.reduce((acc, r) => acc + r.valor, 0);
+    const totalDocumentos = extractTotalDocumentos();
     if (!listado.length) throw new Error("Listado de pagos vacio en la vista actual");
 
     const fechaTexto = cleanText(listado[0].fecha);
@@ -377,6 +425,7 @@
       extraido_en: new Date().toISOString(),
       registros: listado.length,
       total_valor: total,
+      total_documentos: totalDocumentos,
       listado_pagos: listado
     };
 
